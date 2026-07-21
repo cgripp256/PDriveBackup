@@ -4,7 +4,7 @@ REM ============================================================
 REM PDriveBackup
 REM
 REM Author: Christopher Gripp
-REM Current Version: 18
+REM Current Version: 19
 REM Created: February 2026
 REM Last Updated: July 2026
 REM
@@ -15,10 +15,17 @@ REM ============================================================
 
 setlocal EnableExtensions EnableDelayedExpansion
 
-title PDriveBackup v18
+title PDriveBackup v19
 
 REM ============================================================
 REM PDriveBackup.bat
+REM Version 19
+REM
+REM Changes in Version 19:
+REM - Adds /FORCEWEEKLY to run E: and iCloud regardless of marker age
+REM - Preserves the normal daily backup and verification sequence
+REM - Clearly identifies forced weekly runs in the console and log
+REM
 REM Version 16
 REM
 REM Changes in Version 16:
@@ -125,7 +132,7 @@ set "DEST_ICLOUD_PICS=%ICLOUD_BACKUP_ROOT%\Pictures"
 
 set "WEEKLY_DAYS=7"
 set "LOG_RETENTION_DAYS=365"
-set "SCRIPT_VERSION=18"
+set "SCRIPT_VERSION=19"
 
 REM ===== Paths based on this BAT file's folder =====
 set "BASEDIR=%~dp0"
@@ -156,19 +163,27 @@ set "ICLOUD_ELAPSED=NOT RUN"
 set "TOTAL_ELAPSED=UNKNOWN"
 
 set "RUN_MODE=BACKUP"
+set "FORCE_WEEKLY=0"
 if /I "%~1"=="/VERIFY" set "RUN_MODE=VERIFY ONLY"
 if /I "%~1"=="-VERIFY" set "RUN_MODE=VERIFY ONLY"
 if /I "%~1"=="--VERIFY" set "RUN_MODE=VERIFY ONLY"
 if /I "%~1"=="/TEST" set "RUN_MODE=SELF TEST"
 if /I "%~1"=="-TEST" set "RUN_MODE=SELF TEST"
 if /I "%~1"=="--TEST" set "RUN_MODE=SELF TEST"
+if /I "%~1"=="/FORCEWEEKLY" set "RUN_MODE=BACKUP - FORCE WEEKLY"
+if /I "%~1"=="-FORCEWEEKLY" set "RUN_MODE=BACKUP - FORCE WEEKLY"
+if /I "%~1"=="--FORCEWEEKLY" set "RUN_MODE=BACKUP - FORCE WEEKLY"
+if /I "%~1"=="/FORCEWEEKLY" set "FORCE_WEEKLY=1"
+if /I "%~1"=="-FORCEWEEKLY" set "FORCE_WEEKLY=1"
+if /I "%~1"=="--FORCEWEEKLY" set "FORCE_WEEKLY=1"
 
-if not "%~1"=="" if /I not "%~1"=="/VERIFY" if /I not "%~1"=="-VERIFY" if /I not "%~1"=="--VERIFY" if /I not "%~1"=="/TEST" if /I not "%~1"=="-TEST" if /I not "%~1"=="--TEST" (
+if not "%~1"=="" if /I not "%~1"=="/VERIFY" if /I not "%~1"=="-VERIFY" if /I not "%~1"=="--VERIFY" if /I not "%~1"=="/TEST" if /I not "%~1"=="-TEST" if /I not "%~1"=="--TEST" if /I not "%~1"=="/FORCEWEEKLY" if /I not "%~1"=="-FORCEWEEKLY" if /I not "%~1"=="--FORCEWEEKLY" (
     call :Log "ERROR: Unknown option: %~1"
     call :Log "Usage:"
     call :Log "  %~nx0"
     call :Log "  %~nx0 /VERIFY"
     call :Log "  %~nx0 /TEST"
+    call :Log "  %~nx0 /FORCEWEEKLY"
     copy /Y "%LOGFILE%" "%LATEST_LOG%" >nul 2>&1
     endlocal & exit /b 2
 )
@@ -386,7 +401,11 @@ REM ============================================================
 set "RUN_WEEKLY=0"
 set "WEEKLY_AGE="
 
-if not exist "%WEEKLY_MARKER%" (
+if "!FORCE_WEEKLY!"=="1" (
+    set "RUN_WEEKLY=1"
+    call :BlankLine
+    call :Log "FORCE WEEKLY requested. E: and iCloud jobs will run regardless of marker age."
+) else if not exist "%WEEKLY_MARKER%" (
     set "RUN_WEEKLY=1"
     call :BlankLine
     call :Log "No successful weekly-backup marker exists. Weekly cycle is due."
