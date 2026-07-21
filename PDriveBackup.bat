@@ -2,7 +2,7 @@ REM ============================================================
 REM PDriveBackup
 REM
 REM Author: Christopher Gripp
-REM Current Version: 9
+REM Current Version: 10
 REM Created: February 2026
 REM Last Updated: July 2026
 REM
@@ -14,13 +14,18 @@ REM ============================================================
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-title PDriveBackup v9
+title PDriveBackup v10
 
 REM ============================================================
 REM PDriveBackup.bat
-REM Version 9
+REM Version 10
 REM
-REM Changes in Version 9:
+REM Changes in Version 10:
+REM - Excludes full source and destination paths for $RECYCLE.BIN
+REM   and System Volume Information during mirror and verification
+REM - Prevents Windows system folders from causing Robocopy code 2
+REM
+REM Changes retained from Version 9:
 REM - Fixes false iCloud verification failures caused by iCloud metadata changes
 REM - iCloud verification now checks that every source item exists locally
 REM - Fixes blank log lines displaying "ECHO is off."
@@ -93,7 +98,7 @@ set "DEST_ICLOUD_PICS=%ICLOUD_BACKUP_ROOT%\Pictures"
 
 set "WEEKLY_DAYS=7"
 set "LOG_RETENTION_DAYS=365"
-set "SCRIPT_VERSION=9"
+set "SCRIPT_VERSION=10"
 
 REM ===== Paths based on this BAT file's folder =====
 set "BASEDIR=%~dp0"
@@ -654,7 +659,7 @@ robocopy "%JOB_SOURCE%" "%JOB_DEST%" ^
     /FFT ^
     /XJ ^
     /XA:SH ^
-    /XD "$RECYCLE.BIN" "System Volume Information" ^
+    /XD "$RECYCLE.BIN" "System Volume Information" "%JOB_SOURCE%\$RECYCLE.BIN" "%JOB_SOURCE%\System Volume Information" "%JOB_DEST%\$RECYCLE.BIN" "%JOB_DEST%\System Volume Information" ^
     /MT:16 ^
     /LOG+:"%LOGFILE%" ^
     /NP
@@ -780,7 +785,7 @@ robocopy "%VERIFY_SOURCE%" "%VERIFY_DEST%" ^
     /FFT ^
     /XJ ^
     /XA:SH ^
-    /XD "$RECYCLE.BIN" "System Volume Information" ^
+    /XD "$RECYCLE.BIN" "System Volume Information" "%VERIFY_SOURCE%\$RECYCLE.BIN" "%VERIFY_SOURCE%\System Volume Information" "%VERIFY_DEST%\$RECYCLE.BIN" "%VERIFY_DEST%\System Volume Information" ^
     /NFL ^
     /NDL ^
     /NJH ^
