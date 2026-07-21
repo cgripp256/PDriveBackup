@@ -1,8 +1,10 @@
-﻿REM ============================================================
+@echo off
+
+REM ============================================================
 REM PDriveBackup
 REM
 REM Author: Christopher Gripp
-REM Current Version: 12
+REM Current Version: 18
 REM Created: February 2026
 REM Last Updated: July 2026
 REM
@@ -11,14 +13,29 @@ REM Weekly mirror to E:
 REM Weekly retained copy to iCloud
 REM ============================================================
 
-@echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-title PDriveBackup v12
+title PDriveBackup v18
 
 REM ============================================================
 REM PDriveBackup.bat
-REM Version 12
+REM Version 16
+REM
+REM Changes in Version 16:
+REM - Rebuilds from the known-good Version 14 source
+REM - Adds /TEST mode for non-copying configuration and schedule checks
+REM - Funnels all post-lock exits through one finalization path
+REM - Adds explicit lock-release success or failure to each completed log
+REM - Consolidates lock cleanup in the ReleaseLock subroutine
+REM
+REM Changes in Version 14:
+REM - Fixes CMD parsing failure caused by parentheses in day(s) messages
+REM - Removes the UTF-8 byte-order mark that appeared as garbled characters
+REM
+REM Changes in Version 13:
+REM - Fixes premature termination after the daily D: verification
+REM - Avoids a numeric GEQ comparison when WEEKLY_AGE is undefined
+REM - Allows finalization to run and release the single-instance lock
 REM
 REM Changes in Version 12:
 REM - Adds a definitive main-program exit before all subroutine labels
@@ -108,7 +125,7 @@ set "DEST_ICLOUD_PICS=%ICLOUD_BACKUP_ROOT%\Pictures"
 
 set "WEEKLY_DAYS=7"
 set "LOG_RETENTION_DAYS=365"
-set "SCRIPT_VERSION=12"
+set "SCRIPT_VERSION=18"
 
 REM ===== Paths based on this BAT file's folder =====
 set "BASEDIR=%~dp0"
@@ -142,12 +159,16 @@ set "RUN_MODE=BACKUP"
 if /I "%~1"=="/VERIFY" set "RUN_MODE=VERIFY ONLY"
 if /I "%~1"=="-VERIFY" set "RUN_MODE=VERIFY ONLY"
 if /I "%~1"=="--VERIFY" set "RUN_MODE=VERIFY ONLY"
+if /I "%~1"=="/TEST" set "RUN_MODE=SELF TEST"
+if /I "%~1"=="-TEST" set "RUN_MODE=SELF TEST"
+if /I "%~1"=="--TEST" set "RUN_MODE=SELF TEST"
 
-if not "%~1"=="" if /I not "%~1"=="/VERIFY" if /I not "%~1"=="-VERIFY" if /I not "%~1"=="--VERIFY" (
+if not "%~1"=="" if /I not "%~1"=="/VERIFY" if /I not "%~1"=="-VERIFY" if /I not "%~1"=="--VERIFY" if /I not "%~1"=="/TEST" if /I not "%~1"=="-TEST" if /I not "%~1"=="--TEST" (
     call :Log "ERROR: Unknown option: %~1"
     call :Log "Usage:"
     call :Log "  %~nx0"
     call :Log "  %~nx0 /VERIFY"
+    call :Log "  %~nx0 /TEST"
     copy /Y "%LOGFILE%" "%LATEST_LOG%" >nul 2>&1
     endlocal & exit /b 2
 )
@@ -202,6 +223,15 @@ call :Log "========== FREE SPACE BEFORE BACKUP =========="
 call :LogFreeSpace "P:"
 call :LogFreeSpace "D:"
 call :LogFreeSpace "E:"
+
+REM ============================================================
+REM SELF-TEST MODE
+REM ============================================================
+
+if /I "%RUN_MODE%"=="SELF TEST" (
+    call :RunSelfTest
+    goto :Finalize
+)
 
 REM ============================================================
 REM VERIFY SOURCE FOLDERS
@@ -369,24 +399,26 @@ if not exist "%WEEKLY_MARKER%" (
         set "RUN_WEEKLY=1"
         call :BlankLine
         call :Log "WARNING: Could not determine weekly marker age. Weekly cycle will run."
-    ) else if !WEEKLY_AGE! GEQ %WEEKLY_DAYS% (
-        set "RUN_WEEKLY=1"
-        call :BlankLine
-        call :Log "Last fully successful weekly cycle was !WEEKLY_AGE! day(s) ago. Weekly cycle is due."
     ) else (
-        set "RUN_WEEKLY=0"
-        set "E_DOCS_RESULT=SKIPPED - weekly cycle completed !WEEKLY_AGE! day(s) ago"
-        set "E_PICS_RESULT=SKIPPED - weekly cycle completed !WEEKLY_AGE! day(s) ago"
-        set "E_RESULT=SKIPPED - weekly cycle completed !WEEKLY_AGE! day(s) ago"
+        if !WEEKLY_AGE! GEQ %WEEKLY_DAYS% (
+            set "RUN_WEEKLY=1"
+            call :BlankLine
+            call :Log "Last fully successful weekly cycle was !WEEKLY_AGE! days ago. Weekly cycle is due."
+        ) else (
+            set "RUN_WEEKLY=0"
+            set "E_DOCS_RESULT=SKIPPED - weekly cycle completed !WEEKLY_AGE! days ago"
+            set "E_PICS_RESULT=SKIPPED - weekly cycle completed !WEEKLY_AGE! days ago"
+            set "E_RESULT=SKIPPED - weekly cycle completed !WEEKLY_AGE! days ago"
 
-        set "ICLOUD_DOCS_RESULT=SKIPPED - weekly cycle completed !WEEKLY_AGE! day(s) ago"
-        set "ICLOUD_PICS_RESULT=SKIPPED - weekly cycle completed !WEEKLY_AGE! day(s) ago"
-        set "ICLOUD_RESULT=SKIPPED - weekly cycle completed !WEEKLY_AGE! day(s) ago"
+            set "ICLOUD_DOCS_RESULT=SKIPPED - weekly cycle completed !WEEKLY_AGE! days ago"
+            set "ICLOUD_PICS_RESULT=SKIPPED - weekly cycle completed !WEEKLY_AGE! days ago"
+            set "ICLOUD_RESULT=SKIPPED - weekly cycle completed !WEEKLY_AGE! days ago"
 
-        set "WEEKLY_RESULT=SKIPPED - last success !WEEKLY_AGE! day(s) ago"
+            set "WEEKLY_RESULT=SKIPPED - last success !WEEKLY_AGE! days ago"
 
-        call :BlankLine
-        call :Log "Weekly E and iCloud jobs skipped. Last fully successful weekly cycle was !WEEKLY_AGE! day(s) ago."
+            call :BlankLine
+            call :Log "Weekly E and iCloud jobs skipped. Last fully successful weekly cycle was !WEEKLY_AGE! days ago."
+        )
     )
 )
 
@@ -606,8 +638,20 @@ call :Log "  Elapsed:   !ICLOUD_ELAPSED!"
 call :Log ""
 call :Log "Weekly cycle: !WEEKLY_RESULT!"
 call :Log "Total elapsed: !TOTAL_ELAPSED!"
-call :Log "Final exit code: !FINALCODE!"
 call :Log "Log file: !LOGFILE!"
+
+REM Every path after lock acquisition reaches this single cleanup point.
+call :ReleaseLock
+if "!LOCK_RELEASED!"=="1" (
+    call :Log "Lock cleanup: SUCCESS - !LOCKDIR! removed."
+) else if "!LOCK_ACQUIRED!"=="0" (
+    call :Log "Lock cleanup: NOT REQUIRED - this run did not acquire the lock."
+) else (
+    call :Log "Lock cleanup: FAILED - !LOCKDIR! still exists."
+    if !FINALCODE! EQU 0 set "FINALCODE=41"
+)
+echo Final exit code: !FINALCODE!
+echo Final exit code: !FINALCODE!>>"!LOGFILE!"
 call :Log "======================================"
 
 REM Delete only timestamped logs older than the retention period.
@@ -617,14 +661,102 @@ forfiles /P "%LOGDIR%" /M "backup_*.log" /D -%LOG_RETENTION_DAYS% /C "cmd /c del
 REM Maintain one easy-to-find copy of the newest completed run log.
 copy /Y "%LOGFILE%" "%LATEST_LOG%" >nul 2>&1
 
-REM Release the single-instance lock only when this run acquired it.
-if "%LOCK_ACQUIRED%"=="1" rmdir /S /Q "%LOCKDIR%" >nul 2>&1
-
 REM Capture the final code before ENDLOCAL, then terminate the main program.
 REM The explicit GOTO prevents execution from ever falling through into the
 REM subroutine labels below.
 set "SCRIPT_EXIT_CODE=!FINALCODE!"
 goto :ScriptEnd
+
+REM ============================================================
+REM NON-COPYING SELF TEST
+REM ============================================================
+
+:RunSelfTest
+set "TEST_ISSUES=0"
+set "TEST_WEEKLY_STATUS=UNKNOWN"
+
+call :BlankLine
+call :Log "========== SELF TEST =========="
+call :Log "No Robocopy copy or delete operation will be executed."
+
+call :TestPath "%SRC_DOCS%" "Source Documents folder" 1
+call :TestPath "%SRC_PICS%" "Source Pictures folder" 1
+call :TestPath "D:\" "Daily destination drive D" 1
+call :TestPath "E:\" "Weekly destination drive E" 0
+call :TestPath "%ICLOUD_ROOT%" "Local iCloud Drive folder" 0
+call :TestPath "%LOGDIR%" "Log directory" 1
+call :TestPath "%STATEDIR%" "State directory" 1
+
+if not exist "%WEEKLY_MARKER%" (
+    set "TEST_WEEKLY_STATUS=DUE - no successful marker exists"
+    call :Log "Weekly schedule: DUE - no successful weekly marker exists."
+) else (
+    set "TEST_WEEKLY_AGE="
+    for /f %%I in (
+        'powershell.exe -NoProfile -Command "$age=[math]::Floor(((Get-Date)-(Get-Item -LiteralPath '%WEEKLY_MARKER%').LastWriteTime).TotalDays); Write-Output $age"'
+    ) do set "TEST_WEEKLY_AGE=%%I"
+
+    if not defined TEST_WEEKLY_AGE (
+        set "TEST_WEEKLY_STATUS=DUE - marker age could not be determined"
+        set /a TEST_ISSUES+=1
+        call :Log "Weekly schedule: WARNING - marker exists but its age could not be determined."
+    ) else (
+        if !TEST_WEEKLY_AGE! GEQ %WEEKLY_DAYS% (
+            set "TEST_WEEKLY_STATUS=DUE - last success !TEST_WEEKLY_AGE! days ago"
+            call :Log "Weekly schedule: DUE - last success !TEST_WEEKLY_AGE! days ago."
+        ) else (
+            set "TEST_WEEKLY_STATUS=NOT DUE - last success !TEST_WEEKLY_AGE! days ago"
+            call :Log "Weekly schedule: NOT DUE - last success !TEST_WEEKLY_AGE! days ago."
+        )
+    )
+)
+
+set "D_DOCS_RESULT=NOT RUN - SELF TEST"
+set "D_PICS_RESULT=NOT RUN - SELF TEST"
+set "D_RESULT=NOT RUN - SELF TEST"
+set "E_DOCS_RESULT=NOT RUN - SELF TEST"
+set "E_PICS_RESULT=NOT RUN - SELF TEST"
+set "E_RESULT=NOT RUN - SELF TEST"
+set "ICLOUD_DOCS_RESULT=NOT RUN - SELF TEST"
+set "ICLOUD_PICS_RESULT=NOT RUN - SELF TEST"
+set "ICLOUD_RESULT=NOT RUN - SELF TEST"
+set "WEEKLY_RESULT=!TEST_WEEKLY_STATUS!"
+
+if !TEST_ISSUES! EQU 0 (
+    call :Log "Self test: PASS."
+) else (
+    call :Log "Self test: FAIL - !TEST_ISSUES! required check or warning condition detected."
+    if !FINALCODE! EQU 0 set "FINALCODE=50"
+)
+exit /b 0
+
+
+:TestPath
+set "TEST_PATH=%~1"
+set "TEST_LABEL=%~2"
+set "TEST_REQUIRED=%~3"
+if exist "%TEST_PATH%" (
+    call :Log "PASS: %TEST_LABEL% - %TEST_PATH%"
+) else if "%TEST_REQUIRED%"=="1" (
+    call :Log "FAIL: %TEST_LABEL% not found - %TEST_PATH%"
+    set /a TEST_ISSUES+=1
+) else (
+    call :Log "WARNING: %TEST_LABEL% not found - %TEST_PATH%"
+)
+exit /b 0
+
+
+REM ============================================================
+REM RELEASE SINGLE-INSTANCE LOCK
+REM ============================================================
+
+:ReleaseLock
+set "LOCK_RELEASED=0"
+if "%LOCK_ACQUIRED%"=="0" exit /b 0
+if exist "%LOCKDIR%" rmdir /S /Q "%LOCKDIR%" >nul 2>&1
+if not exist "%LOCKDIR%" set "LOCK_RELEASED=1"
+exit /b 0
+
 
 REM ============================================================
 REM RUN AND VERIFY A MIRROR JOB
