@@ -2,7 +2,7 @@ REM ============================================================
 REM PDriveBackup
 REM
 REM Author: Christopher Gripp
-REM Current Version: 8
+REM Current Version: 9
 REM Created: February 2026
 REM Last Updated: July 2026
 REM
@@ -14,13 +14,18 @@ REM ============================================================
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-title PDriveBackup v8
+title PDriveBackup v9
 
 REM ============================================================
 REM PDriveBackup.bat
-REM Version 8
+REM Version 9
 REM
-REM Changes in Version 8:
+REM Changes in Version 9:
+REM - Fixes false iCloud verification failures caused by iCloud metadata changes
+REM - iCloud verification now checks that every source item exists locally
+REM - Fixes blank log lines displaying "ECHO is off."
+REM
+REM Changes retained from Version 8:
 REM - Prevents overlapping runs with a single-instance lock
 REM - Adds /VERIFY mode to check D:, E:, and local iCloud without copying
 REM - Logs the script version and operating mode in every run
@@ -88,7 +93,7 @@ set "DEST_ICLOUD_PICS=%ICLOUD_BACKUP_ROOT%\Pictures"
 
 set "WEEKLY_DAYS=7"
 set "LOG_RETENTION_DAYS=365"
-set "SCRIPT_VERSION=8"
+set "SCRIPT_VERSION=9"
 
 REM ===== Paths based on this BAT file's folder =====
 set "BASEDIR=%~dp0"
@@ -797,8 +802,11 @@ REM ============================================================
 REM VERIFY AN ICLOUD RETAINED COPY
 REM
 REM /XX ignores destination-only files, which are intentionally
-REM retained. The verification fails only if source files or
-REM directories are missing, changed, or otherwise need copying.
+REM retained. /XO /XN /XC ignore iCloud-managed timestamp, size,
+REM and metadata differences for items that already exist locally.
+REM A source item that is completely missing from the local iCloud
+REM folder remains a Robocopy copy candidate and causes verification
+REM to return a nonzero code.
 REM ============================================================
 
 :VerifyCloudCopy
@@ -814,6 +822,9 @@ robocopy "%VERIFY_SOURCE%" "%VERIFY_DEST%" ^
     /E ^
     /L ^
     /XX ^
+    /XO ^
+    /XN ^
+    /XC ^
     /R:0 ^
     /W:0 ^
     /COPY:DAT ^
@@ -911,8 +922,13 @@ REM LOG HELPERS
 REM ============================================================
 
 :Log
-echo %~1
-echo %~1>>"%LOGFILE%"
+if "%~1"=="" (
+    echo.
+    echo.>>"%LOGFILE%"
+) else (
+    echo %~1
+    echo %~1>>"%LOGFILE%"
+)
 exit /b 0
 
 :BlankLine
