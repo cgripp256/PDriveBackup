@@ -12,7 +12,20 @@ PDriveBackup is a Windows batch-based backup utility built around Robocopy. It i
 Unlike a simple Robocopy script, PDriveBackup adds verification, scheduling, logging, lock protection, and self-testing to create a more robust backup solution.
 
 ---
+## Current Release
 
+**Version:** 1.1.0
+
+### Features
+
+- Daily mirror backup (P: → D:)
+- Weekly mirror backup (P: → E:)
+- Weekly retained backup to iCloud Drive
+- Backup verification
+- Automatic logging
+- Lock file protection
+- FORCEWEEKLY test mode
+- 
 # Features
 
 * Daily mirrored backups using Robocopy (`/MIR`)
