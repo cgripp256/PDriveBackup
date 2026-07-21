@@ -1,4 +1,11 @@
 # PDriveBackup
+# PDriveBackup
+
+![Platform](https://img.shields.io/badge/platform-Windows_10%2F11-blue)
+![Language](https://img.shields.io/badge/language-Windows_Batch-green)
+![Version](https://img.shields.io/badge/version-v1.0-orange)
+![Status](https://img.shields.io/badge/status-Stable-brightgreen)
+
 
 PDriveBackup is a Windows batch-based backup utility built around Robocopy. It is designed to provide fast, reliable, and verifiable backups of important data while remaining lightweight, portable, and easy to maintain.
 
