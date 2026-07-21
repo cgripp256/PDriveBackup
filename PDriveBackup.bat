@@ -1,8 +1,8 @@
-REM ============================================================
+﻿REM ============================================================
 REM PDriveBackup
 REM
 REM Author: Christopher Gripp
-REM Current Version: 10
+REM Current Version: 11
 REM Created: February 2026
 REM Last Updated: July 2026
 REM
@@ -14,13 +14,18 @@ REM ============================================================
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-title PDriveBackup v10
+title PDriveBackup v11
 
 REM ============================================================
 REM PDriveBackup.bat
-REM Version 10
+REM Version 11
 REM
-REM Changes in Version 10:
+REM Changes in Version 11:
+REM - Mirror verification now uses /XX to ignore destination-only items
+REM - Prevents Windows-created folders such as $RECYCLE.BIN from
+REM   causing an otherwise valid mirror verification to fail
+REM
+REM Changes retained from Version 10:
 REM - Excludes full source and destination paths for $RECYCLE.BIN
 REM   and System Volume Information during mirror and verification
 REM - Prevents Windows system folders from causing Robocopy code 2
@@ -98,7 +103,7 @@ set "DEST_ICLOUD_PICS=%ICLOUD_BACKUP_ROOT%\Pictures"
 
 set "WEEKLY_DAYS=7"
 set "LOG_RETENTION_DAYS=365"
-set "SCRIPT_VERSION=10"
+set "SCRIPT_VERSION=11"
 
 REM ===== Paths based on this BAT file's folder =====
 set "BASEDIR=%~dp0"
@@ -778,6 +783,7 @@ call :Log "---- Verifying %VERIFY_NAME% ----"
 robocopy "%VERIFY_SOURCE%" "%VERIFY_DEST%" ^
     /MIR ^
     /L ^
+    /XX ^
     /R:0 ^
     /W:0 ^
     /COPY:DAT ^
