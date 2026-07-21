@@ -1,0 +1,6 @@
+# Runtime folders
+PDriveBackupLogs/
+PDriveBackupState/
+
+# Temporary verification logs
+*.tmp
