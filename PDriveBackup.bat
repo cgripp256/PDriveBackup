@@ -2,7 +2,7 @@
 REM PDriveBackup
 REM
 REM Author: Christopher Gripp
-REM Current Version: 11
+REM Current Version: 12
 REM Created: February 2026
 REM Last Updated: July 2026
 REM
@@ -14,13 +14,18 @@ REM ============================================================
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-title PDriveBackup v11
+title PDriveBackup v12
 
 REM ============================================================
 REM PDriveBackup.bat
-REM Version 11
+REM Version 12
 REM
-REM Changes in Version 11:
+REM Changes in Version 12:
+REM - Adds a definitive main-program exit before all subroutine labels
+REM - Prevents accidental fall-through into backup subroutines after finalization
+REM - Uses millisecond timestamps to prevent two runs sharing one log filename
+REM
+REM Changes retained from Version 11:
 REM - Mirror verification now uses /XX to ignore destination-only items
 REM - Prevents Windows-created folders such as $RECYCLE.BIN from
 REM   causing an otherwise valid mirror verification to fail
@@ -103,7 +108,7 @@ set "DEST_ICLOUD_PICS=%ICLOUD_BACKUP_ROOT%\Pictures"
 
 set "WEEKLY_DAYS=7"
 set "LOG_RETENTION_DAYS=365"
-set "SCRIPT_VERSION=11"
+set "SCRIPT_VERSION=12"
 
 REM ===== Paths based on this BAT file's folder =====
 set "BASEDIR=%~dp0"
@@ -118,7 +123,7 @@ if not exist "%STATEDIR%" mkdir "%STATEDIR%"
 
 REM ===== Locale-independent timestamp =====
 for /f %%I in (
-    'powershell.exe -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"'
+    'powershell.exe -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss_fff"'
 ) do set "STAMP=%%I"
 
 set "LOGFILE=%LOGDIR%\backup_%STAMP%.log"
@@ -615,7 +620,11 @@ copy /Y "%LOGFILE%" "%LATEST_LOG%" >nul 2>&1
 REM Release the single-instance lock only when this run acquired it.
 if "%LOCK_ACQUIRED%"=="1" rmdir /S /Q "%LOCKDIR%" >nul 2>&1
 
-endlocal & exit /b %FINALCODE%
+REM Capture the final code before ENDLOCAL, then terminate the main program.
+REM The explicit GOTO prevents execution from ever falling through into the
+REM subroutine labels below.
+set "SCRIPT_EXIT_CODE=!FINALCODE!"
+goto :ScriptEnd
 
 REM ============================================================
 REM RUN AND VERIFY A MIRROR JOB
@@ -946,3 +955,7 @@ exit /b 0
 echo.
 echo.>>"%LOGFILE%"
 exit /b 0
+
+
+:ScriptEnd
+endlocal & exit /b %SCRIPT_EXIT_CODE%
