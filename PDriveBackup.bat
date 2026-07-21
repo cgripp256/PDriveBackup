@@ -4,7 +4,7 @@ REM ============================================================
 REM PDriveBackup
 REM
 REM Author: Christopher Gripp
-REM Current Version: 19
+REM Current Version: 20
 REM Created: February 2026
 REM Last Updated: July 2026
 REM
@@ -15,13 +15,21 @@ REM ============================================================
 
 setlocal EnableExtensions EnableDelayedExpansion
 
-title PDriveBackup v19
+title PDriveBackup v20
 
 REM ============================================================
 REM PDriveBackup.bat
-REM Version 19
+REM Version 20
 REM
-REM Changes in Version 19:
+REM Changes in Version 20:
+REM - Treats mirror-verification Robocopy code 2 as a pass when /XX is used
+REM   because code 2 represents destination-only items that verification
+REM   intentionally ignores
+REM - Rewrites compound IF/ELSE result checks as explicit nested blocks
+REM - Fixes weekly runs incorrectly reporting "Weekly cycle: SKIPPED"
+REM   after a weekly job failed verification
+REM
+REM Changes retained from Version 19:
 REM - Adds /FORCEWEEKLY to run E: and iCloud regardless of marker age
 REM - Preserves the normal daily backup and verification sequence
 REM - Clearly identifies forced weekly runs in the console and log
@@ -132,7 +140,7 @@ set "DEST_ICLOUD_PICS=%ICLOUD_BACKUP_ROOT%\Pictures"
 
 set "WEEKLY_DAYS=7"
 set "LOG_RETENTION_DAYS=365"
-set "SCRIPT_VERSION=19"
+set "SCRIPT_VERSION=20"
 
 REM ===== Paths based on this BAT file's folder =====
 set "BASEDIR=%~dp0"
@@ -280,8 +288,13 @@ if /I "%RUN_MODE%"=="VERIFY ONLY" (
         set "D_PICS_VERIFY_RC=!VERIFY_RC!"
         call :SetVerifyResult !D_PICS_VERIFY_RC! "VERIFIED" D_PICS_RESULT
 
-        if "!D_DOCS_VERIFY_RC!"=="0" if "!D_PICS_VERIFY_RC!"=="0" (
-            set "D_RESULT=SUCCESS - BOTH FOLDERS VERIFIED"
+        if "!D_DOCS_VERIFY_RC!"=="0" (
+            if "!D_PICS_VERIFY_RC!"=="0" (
+                set "D_RESULT=SUCCESS - BOTH FOLDERS VERIFIED"
+            ) else (
+                set "D_RESULT=VERIFICATION FAILED OR INCOMPLETE"
+                if !FINALCODE! EQU 0 set "FINALCODE=20"
+            )
         ) else (
             set "D_RESULT=VERIFICATION FAILED OR INCOMPLETE"
             if !FINALCODE! EQU 0 set "FINALCODE=20"
@@ -302,8 +315,13 @@ if /I "%RUN_MODE%"=="VERIFY ONLY" (
         set "E_PICS_VERIFY_RC=!VERIFY_RC!"
         call :SetVerifyResult !E_PICS_VERIFY_RC! "VERIFIED" E_PICS_RESULT
 
-        if "!E_DOCS_VERIFY_RC!"=="0" if "!E_PICS_VERIFY_RC!"=="0" (
-            set "E_RESULT=SUCCESS - BOTH FOLDERS VERIFIED"
+        if "!E_DOCS_VERIFY_RC!"=="0" (
+            if "!E_PICS_VERIFY_RC!"=="0" (
+                set "E_RESULT=SUCCESS - BOTH FOLDERS VERIFIED"
+            ) else (
+                set "E_RESULT=VERIFICATION FAILED OR INCOMPLETE"
+                if !FINALCODE! EQU 0 set "FINALCODE=21"
+            )
         ) else (
             set "E_RESULT=VERIFICATION FAILED OR INCOMPLETE"
             if !FINALCODE! EQU 0 set "FINALCODE=21"
@@ -324,8 +342,13 @@ if /I "%RUN_MODE%"=="VERIFY ONLY" (
         set "ICLOUD_PICS_VERIFY_RC=!VERIFY_RC!"
         call :SetVerifyResult !ICLOUD_PICS_VERIFY_RC! "LOCAL COPY VERIFIED" ICLOUD_PICS_RESULT
 
-        if "!ICLOUD_DOCS_VERIFY_RC!"=="0" if "!ICLOUD_PICS_VERIFY_RC!"=="0" (
-            set "ICLOUD_RESULT=SUCCESS - BOTH LOCAL COPIES VERIFIED"
+        if "!ICLOUD_DOCS_VERIFY_RC!"=="0" (
+            if "!ICLOUD_PICS_VERIFY_RC!"=="0" (
+                set "ICLOUD_RESULT=SUCCESS - BOTH LOCAL COPIES VERIFIED"
+            ) else (
+                set "ICLOUD_RESULT=VERIFICATION FAILED OR INCOMPLETE"
+                if !FINALCODE! EQU 0 set "FINALCODE=22"
+            )
         ) else (
             set "ICLOUD_RESULT=VERIFICATION FAILED OR INCOMPLETE"
             if !FINALCODE! EQU 0 set "FINALCODE=22"
@@ -361,11 +384,15 @@ if exist "D:\" (
     set "D_PICS_RC=!JOB_RC!"
     set "D_PICS_RESULT=!JOB_RESULT!"
 
-    if "!D_DOCS_RC!"=="0" if "!D_PICS_RC!"=="0" (
-        set "D_RESULT=SUCCESS - BOTH FOLDERS VERIFIED"
+    if "!D_DOCS_RC!"=="0" (
+        if "!D_PICS_RC!"=="0" (
+            set "D_RESULT=SUCCESS - BOTH FOLDERS VERIFIED"
+        ) else (
+            set "D_RESULT=FAILED OR INCOMPLETE"
+            if !FINALCODE! EQU 0 set "FINALCODE=20"
+        )
     ) else (
         set "D_RESULT=FAILED OR INCOMPLETE"
-
         if !FINALCODE! EQU 0 set "FINALCODE=20"
     )
 ) else (
@@ -469,12 +496,16 @@ if "!RUN_WEEKLY!"=="1" (
         set "E_PICS_RC=!JOB_RC!"
         set "E_PICS_RESULT=!JOB_RESULT!"
 
-        if "!E_DOCS_RC!"=="0" if "!E_PICS_RC!"=="0" (
-            set "E_RESULT=SUCCESS - BOTH FOLDERS VERIFIED"
-            set "E_WEEKLY_OK=1"
+        if "!E_DOCS_RC!"=="0" (
+            if "!E_PICS_RC!"=="0" (
+                set "E_RESULT=SUCCESS - BOTH FOLDERS VERIFIED"
+                set "E_WEEKLY_OK=1"
+            ) else (
+                set "E_RESULT=FAILED OR INCOMPLETE"
+                if !FINALCODE! EQU 0 set "FINALCODE=21"
+            )
         ) else (
             set "E_RESULT=FAILED OR INCOMPLETE"
-
             if !FINALCODE! EQU 0 set "FINALCODE=21"
         )
     ) else (
@@ -536,13 +567,17 @@ if "!RUN_WEEKLY!"=="1" (
             set "ICLOUD_PICS_RC=!JOB_RC!"
             set "ICLOUD_PICS_RESULT=!JOB_RESULT!"
 
-            if "!ICLOUD_DOCS_RC!"=="0" if "!ICLOUD_PICS_RC!"=="0" (
-                set "ICLOUD_RESULT=SUCCESS - BOTH LOCAL COPIES VERIFIED"
-                set "ICLOUD_WEEKLY_OK=1"
-                call :Log "NOTE: iCloud for Windows uploads the verified local folders asynchronously."
+            if "!ICLOUD_DOCS_RC!"=="0" (
+                if "!ICLOUD_PICS_RC!"=="0" (
+                    set "ICLOUD_RESULT=SUCCESS - BOTH LOCAL COPIES VERIFIED"
+                    set "ICLOUD_WEEKLY_OK=1"
+                    call :Log "NOTE: iCloud for Windows uploads the verified local folders asynchronously."
+                ) else (
+                    set "ICLOUD_RESULT=FAILED OR INCOMPLETE"
+                    if !FINALCODE! EQU 0 set "FINALCODE=22"
+                )
             ) else (
                 set "ICLOUD_RESULT=FAILED OR INCOMPLETE"
-
                 if !FINALCODE! EQU 0 set "FINALCODE=22"
             )
         )
@@ -557,55 +592,64 @@ if "!RUN_WEEKLY!"=="1" (
     REM UPDATE SHARED WEEKLY MARKER ONLY IF EVERYTHING PASSED
     REM --------------------------------------------------------
 
-    if "!E_WEEKLY_OK!"=="1" if "!ICLOUD_WEEKLY_OK!"=="1" (
-        del /q "%WEEKLY_MARKER_TEMP%" >nul 2>&1
-        >"%WEEKLY_MARKER_TEMP%" echo Last successful E and iCloud backup: %DATE% %TIME%
-        set "MARKER_WRITE_RC=!ERRORLEVEL!"
+    if "!E_WEEKLY_OK!"=="1" (
+        if "!ICLOUD_WEEKLY_OK!"=="1" (
+            del /q "%WEEKLY_MARKER_TEMP%" >nul 2>&1
+            >"%WEEKLY_MARKER_TEMP%" echo Last successful E and iCloud backup: %DATE% %TIME%
+            set "MARKER_WRITE_RC=!ERRORLEVEL!"
 
-        if not "!MARKER_WRITE_RC!"=="0" (
-            set "WEEKLY_RESULT=FAILED - weekly marker could not be written"
-            if !FINALCODE! EQU 0 set "FINALCODE=30"
-
-            call :BlankLine
-            call :Log "ERROR: Weekly backups verified, but the temporary marker file could not be written."
-            call :Log "The weekly marker was not updated."
-            call :Log "  %WEEKLY_MARKER_TEMP%"
-        ) else if not exist "%WEEKLY_MARKER_TEMP%" (
-            set "WEEKLY_RESULT=FAILED - temporary weekly marker is missing"
-            if !FINALCODE! EQU 0 set "FINALCODE=30"
-
-            call :BlankLine
-            call :Log "ERROR: Weekly backups verified, but the temporary marker file is missing."
-            call :Log "The weekly marker was not updated."
-            call :Log "  %WEEKLY_MARKER_TEMP%"
-        ) else (
-            move /Y "%WEEKLY_MARKER_TEMP%" "%WEEKLY_MARKER%" >nul 2>&1
-            set "MARKER_MOVE_RC=!ERRORLEVEL!"
-
-            if not "!MARKER_MOVE_RC!"=="0" (
-                set "WEEKLY_RESULT=FAILED - weekly marker could not be replaced"
+            if not "!MARKER_WRITE_RC!"=="0" (
+                set "WEEKLY_RESULT=FAILED - weekly marker could not be written"
                 if !FINALCODE! EQU 0 set "FINALCODE=30"
 
                 call :BlankLine
-                call :Log "ERROR: Weekly backups verified, but the weekly marker could not be replaced."
+                call :Log "ERROR: Weekly backups verified, but the temporary marker file could not be written."
                 call :Log "The weekly marker was not updated."
-                call :Log "  %WEEKLY_MARKER%"
-            ) else if not exist "%WEEKLY_MARKER%" (
-                set "WEEKLY_RESULT=FAILED - weekly marker is missing after replacement"
+                call :Log "  %WEEKLY_MARKER_TEMP%"
+            ) else if not exist "%WEEKLY_MARKER_TEMP%" (
+                set "WEEKLY_RESULT=FAILED - temporary weekly marker is missing"
                 if !FINALCODE! EQU 0 set "FINALCODE=30"
 
                 call :BlankLine
-                call :Log "ERROR: Weekly backups verified, but the weekly marker is missing after replacement."
-                call :Log "  %WEEKLY_MARKER%"
+                call :Log "ERROR: Weekly backups verified, but the temporary marker file is missing."
+                call :Log "The weekly marker was not updated."
+                call :Log "  %WEEKLY_MARKER_TEMP%"
             ) else (
-                set "WEEKLY_RESULT=SUCCESS - E AND ICLOUD VERIFIED"
+                move /Y "%WEEKLY_MARKER_TEMP%" "%WEEKLY_MARKER%" >nul 2>&1
+                set "MARKER_MOVE_RC=!ERRORLEVEL!"
 
-                call :BlankLine
-                call :Log "Weekly cycle: PASS."
-                call :Log "Documents and Pictures verified on E: and in the local iCloud folders."
-                call :Log "Updated weekly marker file:"
-                call :Log "  %WEEKLY_MARKER%"
+                if not "!MARKER_MOVE_RC!"=="0" (
+                    set "WEEKLY_RESULT=FAILED - weekly marker could not be replaced"
+                    if !FINALCODE! EQU 0 set "FINALCODE=30"
+
+                    call :BlankLine
+                    call :Log "ERROR: Weekly backups verified, but the weekly marker could not be replaced."
+                    call :Log "The weekly marker was not updated."
+                    call :Log "  %WEEKLY_MARKER%"
+                ) else if not exist "%WEEKLY_MARKER%" (
+                    set "WEEKLY_RESULT=FAILED - weekly marker is missing after replacement"
+                    if !FINALCODE! EQU 0 set "FINALCODE=30"
+
+                    call :BlankLine
+                    call :Log "ERROR: Weekly backups verified, but the weekly marker is missing after replacement."
+                    call :Log "  %WEEKLY_MARKER%"
+                ) else (
+                    set "WEEKLY_RESULT=SUCCESS - E AND ICLOUD VERIFIED"
+
+                    call :BlankLine
+                    call :Log "Weekly cycle: PASS."
+                    call :Log "Documents and Pictures verified on E: and in the local iCloud folders."
+                    call :Log "Updated weekly marker file:"
+                    call :Log "  %WEEKLY_MARKER%"
+                )
             )
+        ) else (
+            set "WEEKLY_RESULT=FAILED OR INCOMPLETE - marker not updated"
+
+            call :BlankLine
+            call :Log "WARNING: Weekly cycle was not fully successful."
+            call :Log "The weekly marker was not updated."
+            call :Log "All weekly jobs will be attempted again the next time the script runs."
         )
     ) else (
         set "WEEKLY_RESULT=FAILED OR INCOMPLETE - marker not updated"
@@ -784,8 +828,9 @@ REM Usage:
 REM   call :RunMirror "source" "destination" "display name"
 REM
 REM Robocopy copy codes 0-7 are nonfatal; 8 or higher is failure.
-REM Verification requires code 0; any nonzero code means differences
-REM or a verification error.
+REM Verification accepts code 0. Code 2 is normalized to success when
+REM /XX reports only destination-only items. Other nonzero codes mean
+REM source differences or a verification error.
 REM
 REM Returns:
 REM   JOB_RC=0   Copy and verification succeeded
@@ -958,8 +1003,17 @@ robocopy "%VERIFY_SOURCE%" "%VERIFY_DEST%" ^
     /NP ^
     /LOG:"%VERIFY_REPORT%"
 
-set "VERIFY_RC=!ERRORLEVEL!"
-call :Log "%VERIFY_NAME% verification Robocopy exit code: !VERIFY_RC!."
+set "VERIFY_RAW_RC=!ERRORLEVEL!"
+set "VERIFY_RC=!VERIFY_RAW_RC!"
+call :Log "%VERIFY_NAME% verification Robocopy exit code: !VERIFY_RAW_RC!."
+
+REM /XX intentionally ignores destination-only items. Robocopy code 2 means
+REM only extra destination items were detected, with no source differences.
+REM Normalize that condition to verification success.
+if "!VERIFY_RAW_RC!"=="2" (
+    set "VERIFY_RC=0"
+    call :Log "%VERIFY_NAME% verification note: code 2 accepted because /XX ignores destination-only items."
+)
 
 if exist "%VERIFY_REPORT%" (
     type "%VERIFY_REPORT%">>"%LOGFILE%"
