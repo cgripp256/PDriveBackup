@@ -4,7 +4,7 @@ REM ============================================================
 REM PDriveBackup
 REM
 REM Author: Christopher Gripp
-REM Current Version: 20
+REM Current Version: 22
 REM Created: February 2026
 REM Last Updated: July 2026
 REM
@@ -15,13 +15,29 @@ REM ============================================================
 
 setlocal EnableExtensions EnableDelayedExpansion
 
-title PDriveBackup v20
+title PDriveBackup v22
 
 REM ============================================================
 REM PDriveBackup.bat
-REM Version 20
+REM Version 22
 REM
-REM Changes in Version 20:
+REM Changes in Version 22:
+REM - Records the owning CMD process ID and process start time in RunInfo.txt
+REM - Detects whether an existing lock belongs to a still-running process
+REM - Automatically removes and recovers from confirmed stale locks
+REM - Uses a conservative age fallback for legacy or malformed lock files
+REM - Ensures active-lock failures are written to Latest.log
+REM
+REM Changes retained from Version 21:
+REM - Requires unique identity-marker tokens on D: and E: before any
+REM   mirror or mirror-verification operation is allowed
+REM - Prevents /MIR from running against an unrelated device that has
+REM   been assigned one of the expected backup drive letters
+REM - Adds drive identity results to /TEST mode
+REM - Uses exit code 42 for a D: identity failure and 43 for an E:
+REM   identity failure
+REM
+REM Changes retained from Version 20:
 REM - Treats mirror-verification Robocopy code 2 as a pass when /XX is used
 REM   because code 2 represents destination-only items that verification
 REM   intentionally ignores
@@ -133,6 +149,13 @@ set "DEST_D_PICS=D:\Pictures"
 set "DEST_E_DOCS=E:\Documents"
 set "DEST_E_PICS=E:\Pictures"
 
+REM Unique marker files manually placed on the intended backup drives.
+REM Never create these automatically; that could bless the wrong device.
+set "D_ID_FILE=D:\.pdrivebackup_id"
+set "D_ID_TOKEN=PDRIVEBACKUP_DAILY_V1"
+set "E_ID_FILE=E:\.pdrivebackup_id"
+set "E_ID_TOKEN=PDRIVEBACKUP_WEEKLY_V1"
+
 set "ICLOUD_ROOT=%USERPROFILE%\iCloudDrive"
 set "ICLOUD_BACKUP_ROOT=%ICLOUD_ROOT%\Backups"
 set "DEST_ICLOUD_DOCS=%ICLOUD_BACKUP_ROOT%\Documents"
@@ -140,7 +163,8 @@ set "DEST_ICLOUD_PICS=%ICLOUD_BACKUP_ROOT%\Pictures"
 
 set "WEEKLY_DAYS=7"
 set "LOG_RETENTION_DAYS=365"
-set "SCRIPT_VERSION=20"
+set "STALE_LOCK_HOURS=24"
+set "SCRIPT_VERSION=22"
 
 REM ===== Paths based on this BAT file's folder =====
 set "BASEDIR=%~dp0"
@@ -197,20 +221,66 @@ if not "%~1"=="" if /I not "%~1"=="/VERIFY" if /I not "%~1"=="-VERIFY" if /I not
 )
 
 set "LOCK_ACQUIRED=0"
+set "LOCK_RECOVERED=0"
+
+:AcquireLock
 mkdir "%LOCKDIR%" >nul 2>&1
 if errorlevel 1 (
-    call :Log "ERROR: Another PDriveBackup instance appears to be running."
+    call :InspectExistingLock
+
+    if "!LOCK_STATUS!"=="STALE" (
+        call :Log "WARNING: A stale PDriveBackup lock was detected."
+        call :Log "Lock location:"
+        call :Log "  %LOCKDIR%"
+        call :Log "The recorded owner is no longer running. Removing the stale lock."
+        rmdir /S /Q "%LOCKDIR%" >nul 2>&1
+
+        if exist "%LOCKDIR%" (
+            call :Log "ERROR: The stale lock could not be removed."
+            call :Log "Final exit code: 40"
+            copy /Y "%LOGFILE%" "%LATEST_LOG%" >nul 2>&1
+            endlocal & exit /b 40
+        )
+
+        set "LOCK_RECOVERED=1"
+        goto :AcquireLock
+    )
+
+    if "!LOCK_STATUS!"=="ACTIVE" (
+        call :Log "ERROR: Another PDriveBackup instance is still running."
+    ) else (
+        call :Log "ERROR: An existing PDriveBackup lock could not be safely classified as stale."
+    )
     call :Log "Lock location:"
     call :Log "  %LOCKDIR%"
-    call :Log "If no backup is running, delete that lock directory manually and run again."
+    if defined LOCK_PID call :Log "Recorded PID: !LOCK_PID!"
+    if defined LOCK_STARTED call :Log "Recorded start: !LOCK_STARTED!"
+    call :Log "The existing lock was left in place to avoid overlapping backup runs."
+    call :Log "Final exit code: 40"
+    copy /Y "%LOGFILE%" "%LATEST_LOG%" >nul 2>&1
     endlocal & exit /b 40
 )
 set "LOCK_ACQUIRED=1"
+
+set "LOCK_OWNER_PID="
+set "LOCK_OWNER_START_UTC="
+for /f "tokens=1,2 delims=|" %%A in ('powershell.exe -NoProfile -Command "$parentPid=(Get-CimInstance Win32_Process -Filter ('ProcessId=' + $PID)).ParentProcessId; $proc=Get-Process -Id $parentPid -ErrorAction Stop; Write-Output ($parentPid.ToString() + '|' + $proc.StartTime.ToUniversalTime().ToString('o'))"') do (
+    set "LOCK_OWNER_PID=%%A"
+    set "LOCK_OWNER_START_UTC=%%B"
+)
+
 > "%LOCKDIR%\RunInfo.txt" (
     echo PDriveBackup Version %SCRIPT_VERSION%
-    echo Started: %DATE% %TIME%
-    echo Computer: %COMPUTERNAME%
-    echo Mode: %RUN_MODE%
+    echo PID=!LOCK_OWNER_PID!
+    echo ProcessStartUtc=!LOCK_OWNER_START_UTC!
+    echo Started=%DATE% %TIME%
+    echo Computer=%COMPUTERNAME%
+    echo Mode=%RUN_MODE%
+    echo Script=%~f0
+)
+
+if "!LOCK_RECOVERED!"=="1" (
+    call :Log "Stale lock recovery: SUCCESS - a new lock was acquired."
 )
 
 
@@ -279,7 +349,8 @@ if /I "%RUN_MODE%"=="VERIFY ONLY" (
     call :Log "========== VERIFY-ONLY MODE =========="
     call :Log "No files will be copied, changed, or deleted."
 
-    if exist "D:\" (
+    call :CheckDriveIdentity "D:\" "%D_ID_FILE%" "%D_ID_TOKEN%" "Daily backup drive D"
+    if "!DRIVE_ID_OK!"=="1" (
         call :VerifyMirror "%SRC_DOCS%" "%DEST_D_DOCS%" "D Documents"
         set "D_DOCS_VERIFY_RC=!VERIFY_RC!"
         call :SetVerifyResult !D_DOCS_VERIFY_RC! "VERIFIED" D_DOCS_RESULT
@@ -300,13 +371,14 @@ if /I "%RUN_MODE%"=="VERIFY ONLY" (
             if !FINALCODE! EQU 0 set "FINALCODE=20"
         )
     ) else (
-        set "D_DOCS_RESULT=FAILED - D drive not found"
-        set "D_PICS_RESULT=FAILED - D drive not found"
-        set "D_RESULT=FAILED - D drive not found"
-        if !FINALCODE! EQU 0 set "FINALCODE=11"
+        set "D_DOCS_RESULT=FAILED - drive identity check failed"
+        set "D_PICS_RESULT=FAILED - drive identity check failed"
+        set "D_RESULT=FAILED - drive identity check failed"
+        if !FINALCODE! EQU 0 set "FINALCODE=42"
     )
 
-    if exist "E:\" (
+    call :CheckDriveIdentity "E:\" "%E_ID_FILE%" "%E_ID_TOKEN%" "Weekly backup drive E"
+    if "!DRIVE_ID_OK!"=="1" (
         call :VerifyMirror "%SRC_DOCS%" "%DEST_E_DOCS%" "E Documents"
         set "E_DOCS_VERIFY_RC=!VERIFY_RC!"
         call :SetVerifyResult !E_DOCS_VERIFY_RC! "VERIFIED" E_DOCS_RESULT
@@ -327,10 +399,10 @@ if /I "%RUN_MODE%"=="VERIFY ONLY" (
             if !FINALCODE! EQU 0 set "FINALCODE=21"
         )
     ) else (
-        set "E_DOCS_RESULT=FAILED - E drive not found"
-        set "E_PICS_RESULT=FAILED - E drive not found"
-        set "E_RESULT=FAILED - E drive not found"
-        if !FINALCODE! EQU 0 set "FINALCODE=12"
+        set "E_DOCS_RESULT=FAILED - drive identity check failed"
+        set "E_PICS_RESULT=FAILED - drive identity check failed"
+        set "E_RESULT=FAILED - drive identity check failed"
+        if !FINALCODE! EQU 0 set "FINALCODE=43"
     )
 
     if exist "%ICLOUD_ROOT%\" (
@@ -372,7 +444,8 @@ for /f %%I in (
     'powershell.exe -NoProfile -Command "[int64]([DateTimeOffset]::Now.ToUnixTimeSeconds())"'
 ) do set "DAILY_START=%%I"
 
-if exist "D:\" (
+call :CheckDriveIdentity "D:\" "%D_ID_FILE%" "%D_ID_TOKEN%" "Daily backup drive D"
+if "!DRIVE_ID_OK!"=="1" (
     call :BlankLine
     call :Log "========== DAILY BACKUP TO D:\ =========="
 
@@ -396,11 +469,11 @@ if exist "D:\" (
         if !FINALCODE! EQU 0 set "FINALCODE=20"
     )
 ) else (
-    set "D_DOCS_RESULT=FAILED - D drive not found"
-    set "D_PICS_RESULT=FAILED - D drive not found"
-    set "D_RESULT=FAILED - D drive not found"
-    set "FINALCODE=11"
-    call :Log "ERROR: Daily destination drive D:\ was not found."
+    set "D_DOCS_RESULT=FAILED - drive identity check failed"
+    set "D_PICS_RESULT=FAILED - drive identity check failed"
+    set "D_RESULT=FAILED - drive identity check failed"
+    set "FINALCODE=42"
+    call :Log "ERROR: Daily destination drive D:\ failed its identity check. Mirror operation blocked."
 )
 
 for /f %%I in (
@@ -484,7 +557,8 @@ if "!RUN_WEEKLY!"=="1" (
         'powershell.exe -NoProfile -Command "[int64]([DateTimeOffset]::Now.ToUnixTimeSeconds())"'
     ) do set "E_START=%%I"
 
-    if exist "E:\" (
+    call :CheckDriveIdentity "E:\" "%E_ID_FILE%" "%E_ID_TOKEN%" "Weekly backup drive E"
+    if "!DRIVE_ID_OK!"=="1" (
         call :BlankLine
         call :Log "========== WEEKLY BACKUP TO E:\ =========="
 
@@ -509,12 +583,12 @@ if "!RUN_WEEKLY!"=="1" (
             if !FINALCODE! EQU 0 set "FINALCODE=21"
         )
     ) else (
-        set "E_DOCS_RESULT=FAILED - E drive not found"
-        set "E_PICS_RESULT=FAILED - E drive not found"
-        set "E_RESULT=FAILED - E drive not found"
-        call :Log "ERROR: Weekly destination drive E:\ was not found."
+        set "E_DOCS_RESULT=FAILED - drive identity check failed"
+        set "E_PICS_RESULT=FAILED - drive identity check failed"
+        set "E_RESULT=FAILED - drive identity check failed"
+        call :Log "ERROR: Weekly destination drive E:\ failed its identity check. Mirror operation blocked."
 
-        if !FINALCODE! EQU 0 set "FINALCODE=12"
+        if !FINALCODE! EQU 0 set "FINALCODE=43"
     )
 
     for /f %%I in (
@@ -744,8 +818,10 @@ call :Log "No Robocopy copy or delete operation will be executed."
 
 call :TestPath "%SRC_DOCS%" "Source Documents folder" 1
 call :TestPath "%SRC_PICS%" "Source Pictures folder" 1
-call :TestPath "D:\" "Daily destination drive D" 1
-call :TestPath "E:\" "Weekly destination drive E" 0
+call :CheckDriveIdentity "D:\" "%D_ID_FILE%" "%D_ID_TOKEN%" "Daily backup drive D"
+if "!DRIVE_ID_OK!"=="0" set /a TEST_ISSUES+=1
+call :CheckDriveIdentity "E:\" "%E_ID_FILE%" "%E_ID_TOKEN%" "Weekly backup drive E"
+if "!DRIVE_ID_OK!"=="0" set /a TEST_ISSUES+=1
 call :TestPath "%ICLOUD_ROOT%" "Local iCloud Drive folder" 0
 call :TestPath "%LOGDIR%" "Log directory" 1
 call :TestPath "%STATEDIR%" "State directory" 1
@@ -794,6 +870,52 @@ if !TEST_ISSUES! EQU 0 (
 exit /b 0
 
 
+REM ============================================================
+REM VERIFY BACKUP-DRIVE IDENTITY
+REM
+REM Usage:
+REM   call :CheckDriveIdentity "D:\" "D:\.pdrivebackup_id" "TOKEN" "label"
+REM
+REM Returns:
+REM   DRIVE_ID_OK=1 only when the drive exists, the marker exists,
+REM   and its first line exactly matches the configured token.
+REM ============================================================
+
+:CheckDriveIdentity
+set "DRIVE_ID_ROOT=%~1"
+set "DRIVE_ID_FILE=%~2"
+set "DRIVE_ID_EXPECTED=%~3"
+set "DRIVE_ID_LABEL=%~4"
+set "DRIVE_ID_ACTUAL="
+set "DRIVE_ID_OK=0"
+
+if not exist "%DRIVE_ID_ROOT%" (
+    call :Log "ERROR: %DRIVE_ID_LABEL% is unavailable at %DRIVE_ID_ROOT%."
+    exit /b 0
+)
+
+if not exist "%DRIVE_ID_FILE%" (
+    call :Log "ERROR: %DRIVE_ID_LABEL% identity marker is missing:"
+    call :Log "  %DRIVE_ID_FILE%"
+    call :Log "Mirror operation blocked to protect any unrelated device using this drive letter."
+    exit /b 0
+)
+
+set /p "DRIVE_ID_ACTUAL="<"%DRIVE_ID_FILE%"
+if not "%DRIVE_ID_ACTUAL%"=="%DRIVE_ID_EXPECTED%" (
+    call :Log "ERROR: %DRIVE_ID_LABEL% identity token does not match."
+    call :Log "  Marker: %DRIVE_ID_FILE%"
+    call :Log "  Expected: %DRIVE_ID_EXPECTED%"
+    call :Log "  Found: %DRIVE_ID_ACTUAL%"
+    call :Log "Mirror operation blocked to protect the mounted device."
+    exit /b 0
+)
+
+set "DRIVE_ID_OK=1"
+call :Log "%DRIVE_ID_LABEL% identity: PASS."
+exit /b 0
+
+
 :TestPath
 set "TEST_PATH=%~1"
 set "TEST_LABEL=%~2"
@@ -808,6 +930,49 @@ if exist "%TEST_PATH%" (
 )
 exit /b 0
 
+
+
+
+REM ============================================================
+REM INSPECT AN EXISTING SINGLE-INSTANCE LOCK
+REM
+REM Returns LOCK_STATUS as:
+REM   ACTIVE  - recorded process exists and its start time matches
+REM   STALE   - recorded process is gone/mismatched, or a legacy lock
+REM             exceeds STALE_LOCK_HOURS
+REM   UNKNOWN - lock cannot be safely classified
+REM ============================================================
+
+:InspectExistingLock
+set "LOCK_STATUS=UNKNOWN"
+set "LOCK_PID="
+set "LOCK_PROCESS_START_UTC="
+set "LOCK_STARTED="
+set "LOCK_AGE_HOURS="
+
+if exist "%LOCKDIR%\RunInfo.txt" (
+    for /f "tokens=1,* delims==" %%A in ('findstr /B /C:"PID=" /C:"ProcessStartUtc=" /C:"Started=" "%LOCKDIR%\RunInfo.txt" 2^>nul') do (
+        if /I "%%A"=="PID" set "LOCK_PID=%%B"
+        if /I "%%A"=="ProcessStartUtc" set "LOCK_PROCESS_START_UTC=%%B"
+        if /I "%%A"=="Started" set "LOCK_STARTED=%%B"
+    )
+)
+
+if defined LOCK_PID if defined LOCK_PROCESS_START_UTC (
+    for /f %%I in ('powershell.exe -NoProfile -Command "$p=Get-Process -Id !LOCK_PID! -ErrorAction SilentlyContinue; if ($null -eq $p) { 'STALE' } elseif ($p.StartTime.ToUniversalTime().ToString('o') -eq '!LOCK_PROCESS_START_UTC!') { 'ACTIVE' } else { 'STALE' }"') do set "LOCK_STATUS=%%I"
+    exit /b 0
+)
+
+REM Legacy or malformed locks do not have reliable owner metadata.
+REM Remove them automatically only after a conservative age threshold.
+for /f %%I in ('powershell.exe -NoProfile -Command "try { [math]::Floor(((Get-Date)-(Get-Item -LiteralPath '%LOCKDIR%').LastWriteTime).TotalHours) } catch { '' }"') do set "LOCK_AGE_HOURS=%%I"
+
+if defined LOCK_AGE_HOURS (
+    if !LOCK_AGE_HOURS! GEQ %STALE_LOCK_HOURS% (
+        set "LOCK_STATUS=STALE"
+    )
+)
+exit /b 0
 
 REM ============================================================
 REM RELEASE SINGLE-INSTANCE LOCK
