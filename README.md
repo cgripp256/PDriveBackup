@@ -2,164 +2,144 @@
 
 ![Platform](https://img.shields.io/badge/platform-Windows_10%2F11-blue)
 ![Language](https://img.shields.io/badge/language-Batch-green)
-![Version](https://img.shields.io/badge/version-v1.2.0-orange)
+![Release](https://img.shields.io/badge/release-v2.0.0-orange)
+![Script](https://img.shields.io/badge/script-v26-informational)
 ![Status](https://img.shields.io/badge/status-Stable-success)
-![Robocopy](https://img.shields.io/badge/engine-Robocopy-informational)
+![Backup](https://img.shields.io/badge/engines-Robocopy%20%2B%20restic-informational)
 
-PDriveBackup is a Windows batch-based backup utility built around Robocopy. It is designed to provide fast, reliable, and verifiable backups of important data while remaining lightweight, portable, and easy to maintain.
+PDriveBackup is a Windows backup utility that combines a directly browsable Robocopy mirror with a versioned restic repository.
 
-Unlike a simple Robocopy script, PDriveBackup adds verification, scheduling, logging, destination-drive identity validation, stale-lock recovery, and self-testing to create a more robust backup solution.
+Version 2.0 changes the design from a removable-drive-centered backup workflow to a **C:-based master with independent local, versioned, and offline protection**.
 
 ---
 
 ## Current Release
 
-**Version:** 1.2.0
+**Release:** 2.0.0
+**Script version:** 26
 
-### Features
+### Backup architecture
 
-- Daily mirror backup (`P:` → `D:`)
-- Weekly mirror backup (`P:` → `E:`)
-- Weekly retained backup to iCloud Drive
-- Post-backup verification
-- Verification-only mode (`/VERIFY`)
-- Self-test mode (`/TEST`)
-- Forced weekly mode (`/FORCEWEEKLY`)
-- Destination-drive identity protection
-- Single-instance lock protection
-- Automatic stale-lock recovery
-- Detailed timestamped logging
-- Exit codes suitable for Task Scheduler and automation
+```text
+C:  LIVE MASTER
+    %USERPROFILE%\Documents
+    %USERPROFILE%\Pictures
+            |
+            +--> D: DAILY MIRROR
+            |    D:\Documents
+            |    D:\Pictures
+            |
+            +--> E: DAILY VERSIONED BACKUP
+                 E:\ResticBackup
+
+P:  REMOVABLE OFFLINE MIRROR
+    Updated only with /OFFLINE
+```
+
+The two automatic backup paths have different jobs:
+
+- **D:** fast, immediately browsable current-state recovery.
+- **E:** version history for deleted, overwritten, or changed files.
+- **P:** manually updated removable copy that can remain disconnected between backups.
+
+This avoids making every backup an identical mirror that would immediately reproduce an accidental deletion.
 
 ---
 
-# Backup Strategy
+# Normal Backup
 
-## Daily Backup
+Run:
 
-Every normal run performs mirrored backups from:
-
-```text
-P:\Documents
-P:\Pictures
+```cmd
+PDriveBackup.bat
 ```
 
-to:
+A normal run:
+
+1. Validates the source folders.
+2. Acquires the single-instance lock.
+3. Validates the identity of the `D:` mirror drive.
+4. Mirrors Documents and Pictures from `C:` to `D:` with Robocopy `/MIR`.
+5. Verifies both mirrors with a non-writing Robocopy pass.
+6. Validates the identity of the `E:` versioned-backup drive.
+7. Opens the restic repository using the configured password file.
+8. Creates a restic snapshot of Documents and Pictures.
+9. Applies the retention policy.
+10. Writes a detailed log and records the latest successful/failed normal run.
+
+The `D:` and `E:` jobs are independent. A failure on one backup path is logged without turning the other backup path into a destructive fallback.
+
+---
+
+# Backup Destinations
+
+## D: current-state mirror
+
+Sources:
+
+```text
+%USERPROFILE%\Documents
+%USERPROFILE%\Pictures
+```
+
+Destinations:
 
 ```text
 D:\Documents
 D:\Pictures
 ```
 
-Robocopy `/MIR` mode is used. Immediately after each mirror operation, a verification pass confirms that the destination matches the source.
+The mirror uses Robocopy `/MIR`.
 
-> **Warning:** The daily destinations are dedicated mirrors. Files present at the destination but no longer present in the corresponding source may be deleted by `/MIR`.
+> **Warning:** `/MIR` deletes destination items that no longer exist in the source. `D:` is intentionally a current-state mirror, not version history.
 
----
-
-## Weekly Backup
-
-Once every seven days, the script also performs mirrored backups to:
-
-```text
-E:\Documents
-E:\Pictures
-```
-
-This provides an additional local backup copy.
-
-The weekly cycle runs only after the daily backup and verification succeed. It may also be started manually with `/FORCEWEEKLY`.
-
-> **Warning:** The weekly `E:` destinations are dedicated mirrors and are also subject to `/MIR` deletion behavior.
+Every mirror is followed by a read-only verification pass.
 
 ---
 
-## Weekly iCloud Backup
+## E: versioned restic repository
 
-During the weekly cycle, retained, non-mirrored copies are written to:
+Repository:
 
 ```text
-C:\Users\<username>\iCloudDrive\Backups\Documents
-C:\Users\<username>\iCloudDrive\Backups\Pictures
+E:\ResticBackup
 ```
 
-The iCloud jobs use recursive copy behavior rather than `/MIR`, so deleting an item from `P:` does not automatically delete the retained local iCloud copy.
+The repository receives a daily snapshot of:
 
-PDriveBackup verifies the local iCloud Drive folders. iCloud for Windows uploads those files asynchronously afterward.
+```text
+%USERPROFILE%\Documents
+%USERPROFILE%\Pictures
+```
 
-The weekly-success marker is updated only after both `E:` mirrors and both local iCloud copies verify successfully.
+Configured retention policy:
+
+```text
+30 daily
+12 weekly
+12 monthly
+3 yearly
+```
+
+restic deduplicates unchanged data, so retained snapshots do not create a complete second copy of every unchanged file.
+
+Daily backup runs apply the retention policy but do not perform an expensive prune. Repository maintenance is handled separately with `/MAINTENANCE`.
 
 ---
 
-# Safety Features
+## P: removable offline mirror
 
-PDriveBackup is intentionally conservative. Before a mirror operation is allowed, it verifies:
+`P:` is not part of a normal scheduled run.
 
-- Required source folders exist
-- The destination drive has the expected identity marker
-- Another backup instance is not already active
-- The weekly schedule state is valid
+To update the removable backup intentionally:
 
-Every mirror operation is followed by verification before it is reported as successful.
-
-These safeguards reduce the risk of accidental data loss while allowing unattended operation through Windows Task Scheduler.
-
----
-
-# Drive Identity Protection
-
-Drive letters can be reassigned by Windows. Running `/MIR` against the wrong device could therefore delete or overwrite unrelated files.
-
-PDriveBackup prevents this by requiring a hidden marker file and exact identity token on each mirror destination.
-
-## Daily backup drive
-
-File:
-
-```text
-D:\.pdrivebackup_id
+```cmd
+PDriveBackup.bat /OFFLINE
 ```
 
-Required contents:
+The script requires the dedicated `P:` identity marker before any mirror operation is allowed.
 
-```text
-PDRIVEBACKUP_DAILY_V1
-```
-
-## Weekly backup drive
-
-File:
-
-```text
-E:\.pdrivebackup_id
-```
-
-Required contents:
-
-```text
-PDRIVEBACKUP_WEEKLY_V1
-```
-
-If a marker file is missing or its contents do not exactly match the configured token, the script aborts before Robocopy performs a mirror or mirror-verification operation.
-
-The marker files should remain hidden and should not be renamed, moved, or duplicated onto unrelated drives.
-
----
-
-# Verification
-
-Every completed mirror is followed by a verification-only Robocopy pass.
-
-Verification checks for:
-
-- Missing files
-- Copy failures
-- File mismatches
-- Unexpected source-side differences
-
-Mirror verification uses `/XX`, so destination-only system or retained items are intentionally ignored. Robocopy exit code `2` is accepted in that specific verification context because it represents destination-only items excluded by `/XX`.
-
-A backup is reported as successful only after verification passes.
+Keeping `P:` disconnected between updates provides protection against failures or malware that can reach always-mounted storage.
 
 ---
 
@@ -171,24 +151,31 @@ A backup is reported as successful only after verification passes.
 PDriveBackup.bat
 ```
 
-Runs the daily `D:` mirror and verification. If the weekly cycle is due, it also runs the `E:` mirror and retained iCloud backup.
+Runs the `C:` → `D:` mirror and the `C:` → `E:` restic snapshot/retention workflow.
 
-## Self-test
+## Health check
 
 ```cmd
-PDriveBackup.bat /TEST
+PDriveBackup.bat /HEALTH
 ```
 
-Validates:
+Performs a non-destructive diagnostic check, including:
 
-- Source folders
-- Destination-drive identity markers
-- Local iCloud Drive location
-- Log directory
-- State directory
-- Weekly schedule calculation
+- required Windows commands
+- source folders
+- `D:` and `E:` identity markers
+- write access
+- restic executable availability
+- restic password-file availability
+- restic repository access
+- lock ownership
+- status of the removable `P:` drive
+- age/status of the latest completed normal backup
+- destination free space
 
-No Robocopy copy or delete operation is executed.
+A normal backup older than the configured health threshold is reported as a warning.
+
+`/TEST` is retained as an alias for `/HEALTH`.
 
 ## Verify only
 
@@ -196,100 +183,274 @@ No Robocopy copy or delete operation is executed.
 PDriveBackup.bat /VERIFY
 ```
 
-Compares the source folders with the current `D:`, `E:`, and local iCloud destinations.
+Performs non-destructive verification of the current backup state.
 
-No files are copied, changed, or deleted.
+It verifies the `D:` mirror and checks the restic repository without creating a new backup snapshot.
 
-## Force weekly
+## Offline backup
 
 ```cmd
-PDriveBackup.bat /FORCEWEEKLY
+PDriveBackup.bat /OFFLINE
 ```
 
-Runs the normal daily backup and then performs the weekly `E:` and iCloud jobs regardless of the weekly marker age.
+Updates the removable `P:` mirror after validating its identity marker.
 
-The weekly-success marker is still updated only if all weekly operations verify successfully.
+This mode is intended to be run manually when the removable SSD is connected.
+
+## Repository maintenance
+
+```cmd
+PDriveBackup.bat /MAINTENANCE
+```
+
+Runs periodic restic repository maintenance, including repository checking and pruning.
+
+This is intentionally separate from the daily backup so routine backups remain relatively fast.
 
 ---
 
-# Lock Protection and Recovery
+# Drive Identity Protection
 
-PDriveBackup uses a lock directory to prevent overlapping runs.
+Windows can reassign drive letters. Running `/MIR` against the wrong device could delete unrelated data.
 
-When the lock is acquired, `RunInfo.txt` records:
+PDriveBackup requires a marker file with an exact token before using protected destination drives.
 
-- Script version
-- Owning CMD process ID
-- Owning process start time in UTC
-- Run start time
-- Computer name
-- Operating mode
-- Script path
+## D: daily mirror
 
-If a lock already exists, Version 22 checks whether the recorded process is still active and whether its start time matches.
+File:
 
-- An active lock is preserved and the new run exits safely.
-- A confirmed stale lock is removed automatically and lock acquisition is retried.
-- A legacy or malformed lock is handled conservatively and is removed only when the fallback checks confirm that it is stale.
-- A lock that cannot be safely classified is left in place.
+```text
+D:\.pdrivebackup_id
+```
 
-Completed lock-acquisition failures are copied to `Latest.log` so the most recent operational problem remains visible.
+Contents:
 
-Normal completion removes the lock automatically and reports whether cleanup succeeded.
+```text
+PDRIVEBACKUP_DAILY_V1
+```
+
+## E: versioned backup
+
+File:
+
+```text
+E:\.pdrivebackup_id
+```
+
+Contents:
+
+```text
+PDRIVEBACKUP_WEEKLY_V1
+```
+
+The legacy token name is intentionally retained for compatibility with the existing `E:` drive marker even though `E:` is no longer a weekly mirror.
+
+## P: removable offline mirror
+
+File:
+
+```text
+P:\.pdrivebackup_id
+```
+
+Contents:
+
+```text
+PDRIVEBACKUP_OFFLINE_V1
+```
+
+Do not automatically create identity markers. They are intended to be placed manually on known drives so the script cannot accidentally "approve" the wrong device.
+
+---
+
+# restic Configuration
+
+PDriveBackup expects restic to be installed and available in `PATH`.
+
+Example Windows installation:
+
+```powershell
+winget install --exact --id restic.restic --scope Machine
+```
+
+Repository:
+
+```text
+E:\ResticBackup
+```
+
+Password file:
+
+```text
+C:\ProgramData\PDriveBackup\restic-password.txt
+```
+
+The password file should contain only the repository password and should be restricted to the backup account and `SYSTEM`.
+
+Example ACL configuration:
+
+```powershell
+$pwfile = "C:\ProgramData\PDriveBackup\restic-password.txt"
+$account = "$env:USERDOMAIN\$env:USERNAME"
+
+icacls $pwfile /inheritance:r
+icacls $pwfile /grant:r "${account}:(R)" "SYSTEM:(R)"
+```
+
+Verify unattended repository access with:
+
+```powershell
+restic -r "E:\ResticBackup" `
+    --password-file "C:\ProgramData\PDriveBackup\restic-password.txt" `
+    snapshots
+```
+
+> **Important:** Loss of the restic repository password makes the encrypted repository unrecoverable. Store the password securely outside the repository.
+
+---
+
+# Restoring Data
+
+## From D:
+
+`D:` is a normal filesystem mirror. Files can be copied directly from:
+
+```text
+D:\Documents
+D:\Pictures
+```
+
+## From E:
+
+List snapshots:
+
+```powershell
+restic -r "E:\ResticBackup" `
+    --password-file "C:\ProgramData\PDriveBackup\restic-password.txt" `
+    snapshots
+```
+
+Restore the latest snapshot to a separate folder:
+
+```powershell
+restic -r "E:\ResticBackup" `
+    --password-file "C:\ProgramData\PDriveBackup\restic-password.txt" `
+    restore latest `
+    --target "C:\ResticRestore"
+```
+
+Restore to a separate location first and verify the recovered data before replacing live files.
+
+---
+
+# Verification and Integrity
+
+PDriveBackup uses different verification methods for each backup type.
+
+### D: Robocopy mirror
+
+The mirror is followed by a Robocopy list-only comparison using the same copy/exclusion semantics. A clean verification produces no source-side copy candidates.
+
+### E: restic repository
+
+`/VERIFY` checks repository accessibility and integrity without creating a new snapshot.
+
+For a deeper manual check that reads stored pack data:
+
+```powershell
+restic -r "E:\ResticBackup" `
+    --password-file "C:\ProgramData\PDriveBackup\restic-password.txt" `
+    check --read-data
+```
+
+A successful restore test is still the strongest practical validation that a backup can actually be recovered.
+
+---
+
+# Lock Protection
+
+PDriveBackup prevents overlapping executions with a lock directory.
+
+The lock records information such as:
+
+- script version
+- owning process ID
+- process start time
+- computer name
+- operating mode
+- script path
+
+If an existing lock belongs to a live process, a second run exits safely.
+
+Confirmed stale locks are recovered automatically. Locks that cannot be classified safely are left in place rather than risking overlapping backup operations.
 
 ---
 
 # Logging
 
-Each execution creates a timestamped log containing:
-
-- Script version
-- Operating mode
-- Source and destination information
-- Free disk space
-- Drive identity results
-- Robocopy results
-- Verification results
-- Weekly scheduling decision
-- Stale-lock recovery status, when applicable
-- Elapsed time
-- Final exit code
-- Lock cleanup status
-
-Example:
+Each run creates a timestamped log in:
 
 ```text
-backup_20260721_180026_529.log
+PDriveBackupLogs\
 ```
 
-Millisecond timestamps ensure unique filenames even when runs begin close together.
+Logs include:
 
-`Latest.log` is refreshed with the newest completed run, including runs that stop because an active or unclassified lock prevents startup.
+- script version and mode
+- source and destination paths
+- free space
+- identity-check results
+- Robocopy results
+- mirror verification
+- restic results
+- retention/maintenance status
+- offline-backup status
+- lock status
+- elapsed time
+- final exit code
 
-Timestamped logs older than the configured retention period are removed automatically.
+`Latest.log` is maintained for quick access to the newest completed run.
+
+The script also tracks the latest completed normal backup independently so health checks do not overwrite the operational status they are evaluating.
+
+Runtime logs and state are excluded from source control.
 
 ---
 
-# Exit Codes
+# Task Scheduler
 
-| Exit Code | Meaning |
-| ---: | --- |
-| `0` | Success |
-| `2` | Invalid command-line option |
-| `10` | Required source folder missing |
-| `13` | Local iCloud Drive path unavailable |
-| `14` | iCloud backup destination could not be created |
-| `20` | Daily `D:` backup or verification failure |
-| `21` | Weekly `E:` backup or verification failure |
-| `22` | Weekly local iCloud copy or verification failure |
-| `30` | Weekly-success marker update failure |
-| `40` | Lock acquisition failed or an existing lock could not be safely cleared |
-| `41` | Lock cleanup failed |
-| `42` | Daily `D:` drive identity validation failed |
-| `43` | Weekly `E:` drive identity validation failed |
-| `50` | Self-test failure |
+A normal backup can be run unattended from Windows Task Scheduler.
 
-Robocopy return codes are interpreted internally. The script emits the normalized exit codes above for Task Scheduler, shell scripts, and other automation.
+The tested configuration uses:
+
+- a daily trigger
+- `Run with highest privileges`
+- `Start the task as soon as possible after a scheduled start is missed`
+- S4U logon for a local-only backup workflow
+
+Using S4U avoids storing a Windows password with the task, so changing the Windows account password does not invalidate the scheduled backup.
+
+Example task action:
+
+```text
+C:\Git\PDriveBackup\PDriveBackup.bat
+```
+
+The script returns a nonzero exit code when an operation fails so Task Scheduler can record failures.
+
+---
+
+# Requirements
+
+- Windows 10 or Windows 11
+- Robocopy
+- PowerShell
+- restic
+- NTFS/local storage for the configured backup drives
+- valid `D:` and `E:` identity markers
+- restic repository initialized at `E:\ResticBackup`
+- protected restic password file
+- optional removable `P:` drive with its offline identity marker
 
 ---
 
@@ -303,63 +464,51 @@ PDriveBackup/
 ├── CHANGELOG.md
 ├── .gitignore
 │
-├── PDriveBackupLogs/
-└── PDriveBackupState/
+├── PDriveBackupLogs/      # generated
+└── PDriveBackupState/     # generated
 ```
 
-`PDriveBackupLogs` and `PDriveBackupState` are generated automatically at runtime and should be excluded from source control.
-
 ---
 
-# Requirements
+# Version 2.0 Validation
 
-- Windows 10 or Windows 11
-- Robocopy, included with Windows
-- PowerShell
-- Local or mapped source and backup drives
-- Correct drive identity marker files on `D:` and `E:`
-- Optional iCloud for Windows for the retained cloud copy
-
----
-
-# Tested Release Status
-
-Version 22 was validated on July 21, 2026 with:
+Version 26 was validated on October 5, 2026 with:
 
 ```cmd
-PDriveBackup.bat /TEST
+PDriveBackup.bat /HEALTH
 PDriveBackup.bat /VERIFY
+PDriveBackup.bat
 ```
 
-Both completed successfully with final exit code `0`.
+All completed with exit code `0`.
 
-The verification run confirmed:
+The versioned backup repository was also validated independently with:
 
-- `D:\Documents`
-- `D:\Pictures`
-- `E:\Documents`
-- `E:\Pictures`
-- Local iCloud Documents
-- Local iCloud Pictures
-- Successful lock cleanup
+- a full initial restic snapshot
+- a deduplicated incremental snapshot
+- `restic check`
+- `restic check --read-data`
+- an actual restore of the Lightroom catalog
+- SHA-256 comparison of the restored catalog against the source
 
-The `E:\Pictures` verification returned Robocopy code `2`, which was correctly accepted because `/XX` intentionally ignores destination-only items.
+The restored file matched the source hash.
+
+The production script was then launched through Windows Task Scheduler using S4U and completed successfully.
 
 ---
 
 # Design Goals
 
-PDriveBackup was built with the following priorities:
+PDriveBackup prioritizes:
 
-- Reliability
-- Data integrity
-- Conservative failure handling
-- Safe unattended operation
-- Simple deployment
-- Readable logging
-- Minimal dependencies
-- Easy maintenance
-- Compatibility with Windows Task Scheduler
+- conservative failure handling
+- verifiable recovery
+- protection against accidental deletion
+- safe unattended execution
+- independent backup paths
+- readable logging
+- straightforward disaster recovery
+- limited external dependencies
 
 ---
 
